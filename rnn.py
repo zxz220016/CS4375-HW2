@@ -17,13 +17,15 @@ unk = '<UNK>'
 # Consult the PyTorch documentation for information on the functions used below:
 # https://pytorch.org/docs/stable/torch.html
 class RNN(nn.Module):
-    def __init__(self, input_dim, h, dropout_prob = 0.5):  # Add relevant parameters
+    def __init__(self, input_dim, h):  # Add relevant parameters
         super(RNN, self).__init__()
         self.h = h
         self.numOfLayer = 1
-        self.rnn = nn.RNN(input_dim, h, self.numOfLayer, nonlinearity='tanh')
-        self.W = nn.Linear(h, 5)
-        self.dropout = nn.Dropout(dropout_prob)
+        self.embedding = nn.Embedding.from_pretrained(torch.tensor(embed_matrix, dtype = torch.float32), freeze = True)
+        self.rnn = nn.LSTM(input_dim, h, num_layers=self.numOfLayer, batch_first=True)
+        self.W1 = nn.Linear(h, 32)
+        self.activation = nn.ReLU()
+        self.W2 = nn.Linear(32, 5)
         self.softmax = nn.LogSoftmax(dim=1)
         self.loss = nn.NLLLoss()
 
@@ -31,62 +33,40 @@ class RNN(nn.Module):
         return self.loss(predicted_vector, gold_label)
 
     def forward(self, inputs):
+        embedded = self.embedding(inputs)
         # [to fill] obtain hidden layer representation (https://pytorch.org/docs/stable/generated/torch.nn.RNN.html)
-        _, hidden = self.rnn(inputs)
+        _, (hidden,_) = self.rnn(embedded)
 
-        hidden = self.dropout(hidden[-1])
         # [to fill] obtain output layer representations
-        output_layer = self.W(hidden)
+
+        output_layer = self.activation(self.W1(hidden[-1]))
+        output_layer = self.W2(output_layer)
+        
         # [to fill] sum over output 
         sum_output = torch.sum(output_layer, dim = 0)
         # [to fill] obtain probability dist.
         predicted_vector = self.softmax(sum_output.reshape(1, -1))
         return predicted_vector
-    
-def average_review_length(data):
-    total_length = 0
-    total_reviews = len(data)
-    
-    for review,_ in data:
-        review_length = len(review)
-        total_length += review_length
-    
-    if total_reviews > 0:
-        avg_length = total_length / total_reviews  
-    else: 0
-    return avg_length
 
 
-def load_data(train_data, val_data, test_data):
+def load_data(train_data, val_data):
     with open(train_data) as training_f:
         training = json.load(training_f)
     with open(val_data) as valid_f:
         validation = json.load(valid_f)
-    with open(test_data) as test_f:
-        test_set = json.load(test_f)
 
     tra = []
     val = []
-    test_list = []
+
     for elt in training:
         tra.append((elt["text"].split(),int(elt["stars"]-1)))
     for elt in validation:
         val.append((elt["text"].split(),int(elt["stars"]-1)))
-    for elt in test_set:
-        test_list.append((elt["text"].split(),int(elt["stars"]-1)))
-    
-    average_tra = average_review_length(tra)
-    average_val = average_review_length(val)
-    average_test = average_review_length(test_list)
-
 
     print("the size of training data is {}.".format(len(tra)))
     print("the size of validation data is {}.".format(len(val)))
-    print("the size of test data is {}.".format(len(test_list)))
-    print("the average length of training data is {}.".format(average_tra))
-    print("the average length of validation data is {}.".format(average_val))
-    print("the average length of test data is {}.".format(average_test))
-    return tra, val, test_list
+
+    return tra, val
 
 
 if __name__ == "__main__":
@@ -100,8 +80,16 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     print("========== Loading data ==========")
-    train_data, valid_data, test_data = load_data(args.train_data, args.val_data, args.test_data) # X_data is a list of pairs (document, y); y in {0,1,2,3,4}
+    train_data, valid_data = load_data(args.train_data, args.val_data) # X_data is a list of pairs (document, y); y in {0,1,2,3,4}
 
+    word_embedding = pickle.load(open('Data_Embedding/word_embedding.pkl', 'rb'))
+    ############################## ADD
+    embedd_index = {word: index for index, word in enumerate(word_embedding.keys())}
+    embed_dimension = len(next(iter(word_embedding.values())))
+    embed_matrix = np.zeros((len(embedd_index), embed_dimension))
+
+    for word, index in embedd_index.items():
+        embed_matrix[index] = word_embedding[word]
     # Think about the type of function that an RNN describes. To apply it, you will need to convert the text data into vector representations.
     # Further, think about where the vectors will come from. There are 3 reasonable choices:
     # 1) Randomly assign the input to vectors and learn better embeddings during training; see the PyTorch documentation for guidance
@@ -110,18 +98,20 @@ if __name__ == "__main__":
     # Option 3 will be the most time consuming, so we do not recommend starting with this
 
     print("========== Vectorizing data ==========")
-    model = RNN(50, args.hidden_dim)  # Fill in parameters
+    model = RNN(embed_dimension, args.hidden_dim)  # Fill in parameters
     # optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
     optimizer = optim.Adam(model.parameters(), lr=0.01, weight_decay=1e-5)
-    word_embedding = pickle.load(open('Data_Embedding/word_embedding.pkl', 'rb'))
 
     stopping_condition = False
     epoch = 0
 
+    patient = 3
+    epoch_compare = 0
+
     last_train_accuracy = 0
     last_validation_accuracy = 0
 
-    while not stopping_condition:
+    while epoch < args.epochs and not stopping_condition:
         random.shuffle(train_data)
         model.train()
         # You will need further code to operationalize training, ffnn.py may be helpful
@@ -145,14 +135,12 @@ if __name__ == "__main__":
                 input_words = input_words.translate(input_words.maketrans("", "", string.punctuation)).split()
 
                 # Look up word embedding dictionary
-                vectors = [word_embedding[i.lower()] if i.lower() in word_embedding.keys() else word_embedding['unk'] for i in input_words ]
+                input_indices = [embedd_index.get(word.lower(), embedd_index['unk']) for word in input_words]
 
                 # Transform the input into required shape
-                #vectors = torch.tensor(vectors).view(len(vectors), 1, -1)
-                ####################### change
-                vectors = np.array(vectors) 
-                vectors = torch.from_numpy(vectors).float().view(len(vectors), 1, -1)
-                output = model(vectors)
+                
+                input_tensor = torch.tensor(input_indices, dtype = torch.long).view(-1, 1)
+                output = model(input_tensor)
 
                 # Get loss
                 example_loss = model.compute_Loss(output.view(1,-1), torch.tensor([gold_label]))
@@ -173,7 +161,7 @@ if __name__ == "__main__":
             loss_count += 1
             loss.backward()
             optimizer.step()
-        print("The avger loss is{}".format(loss_total/loss_count))
+        print("The avger loss is {}".format(loss_total/loss_count))
         print("Training completed for epoch {}".format(epoch + 1))
         print("Training accuracy for epoch {}: {}".format(epoch + 1, correct / total))
         print("Output Log-P: {}".format(output.tolist()))
@@ -185,6 +173,7 @@ if __name__ == "__main__":
         correct = 0
         total = 0
         random.shuffle(valid_data)
+        print("----------Validation started------------")
         print("Validation started for epoch {}".format(epoch + 1))
         valid_data = valid_data
 
@@ -192,22 +181,21 @@ if __name__ == "__main__":
             for input_words, gold_label in valid_data:
                 input_words = " ".join(input_words)
                 input_words = input_words.translate(input_words.maketrans("", "", string.punctuation)).split()
-                vectors = [word_embedding[i.lower()] if i.lower() in word_embedding.keys() else word_embedding['unk'] for i
-                        in input_words]
-############### change
-                vectors = np.array(vectors) 
-                vectors = torch.from_numpy(vectors).float().view(len(vectors), 1, -1)
-                output = model(vectors)
+                input_indices = [embedd_index[i.lower()] if i.lower() in embedd_index.keys() else embedd_index['unk'] for i in input_words]
+
+                input_tensor = torch.tensor(input_indices, dtype = torch.long).view(-1, 1)
+                output = model(input_tensor)
                 predicted_label = torch.argmax(output)
                 correct += int(predicted_label == gold_label)
                 total += 1
                 # print(predicted_label, gold_label)
-        print("Validation completed for epoch {}".format(epoch + 1))
-        print("Validation accuracy for epoch {}: {}".format(epoch + 1, correct / total))
-        print("Output Log-P: {}".format(output.tolist()))
-        print("predicated label for this epoch: {}".format(predicted_label + 1))
-        validation_accuracy = correct/total
-
+            print("Validation completed for epoch {}".format(epoch + 1))
+            print("Validation accuracy for epoch {}: {}".format(epoch + 1, correct / total))
+            print("Output Log-P: {}".format(output.tolist()))
+            print("predicated label for this epoch: {}".format(predicted_label + 1))
+            validation_accuracy = correct/total
+        
+        
         if validation_accuracy < last_validation_accuracy and trainning_accuracy > last_train_accuracy:
             stopping_condition=True
             print("Training done to avoid overfitting!")
@@ -217,11 +205,3 @@ if __name__ == "__main__":
             last_train_accuracy = trainning_accuracy
 
         epoch += 1
-        if epoch >= args.epochs:
-            stopping_condition = True
-
-
-
-    # You may find it beneficial to keep track of training accuracy or training loss;
-
-    # Think about how to update the model and what this entails. Consider ffnn.py and the PyTorch documentation for guidance

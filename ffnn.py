@@ -12,6 +12,7 @@ import json
 from argparse import ArgumentParser
 
 
+
 unk = '<UNK>'
 # Consult the PyTorch documentation for information on the functions used below:
 # https://pytorch.org/docs/stable/torch.html
@@ -79,18 +80,7 @@ def convert_to_vector_representation(data, word2index):
         vectorized_data.append((vector, y))
     return vectorized_data
 
-def average_review_length(data):
-    total_length = 0
-    total_reviews = len(data)
-    
-    for review in data:
-        review_length = len(review)
-        total_length += review_length
-    
-    if total_reviews > 0:
-        avg_length = total_length / total_reviews  
-    else: 0
-    return avg_length
+
 
 def load_data(train_data, val_data):
     with open(train_data) as training_f:
