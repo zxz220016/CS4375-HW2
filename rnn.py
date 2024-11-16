@@ -100,7 +100,7 @@ if __name__ == "__main__":
     print("========== Vectorizing data ==========")
     model = RNN(embed_dimension, args.hidden_dim)  # Fill in parameters
     # optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
-    optimizer = optim.Adam(model.parameters(), lr=0.01, weight_decay=1e-5)
+    optimizer = optim.Adam(model.parameters(), lr=0.0001, weight_decay=1e-5)
 
     stopping_condition = False
     epoch = 0
